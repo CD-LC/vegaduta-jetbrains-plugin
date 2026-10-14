@@ -17,7 +17,7 @@ You can use it in two ways:
 > **Maintainers: this directory is published under Apache-2.0 and mirrored publicly.**
 > JetBrains Marketplace needs a source-code link for plugins with an open-source
 > licence, so `clients/jetbrains` and `clients/shared` are mirrored to
-> <https://github.com/punith-naga/vegaduta-jetbrains-plugin> (as `plugin/` and
+> <https://github.com/cdandlc/vegaduta-jetbrains-plugin> (as `plugin/` and
 > `shared/`). Plugin 33539's Technical Information links to that repo.
 > **Re-sync that repo on every Marketplace release.** Treat both directories as
 > public: no secrets, no internal hostnames and no private doc paths.

@@ -69,8 +69,15 @@ npm run typecheck
 ## Configuration
 
 Settings > Tools > VegaDuta selects the environment: `production`
-(api/auth.vegaduta.ai, the default), `staging` (api/auth.vegaduta.xyz), or
-`custom` base URLs for self-hosted installs. There are no localhost defaults.
+(api/auth.vegaduta.ai, the default), `staging` (api/auth.vegaduta.xyz),
+`custom` base URLs for self-hosted installs, or `local` — a VegaDuta install
+running on this machine (compose lite or a dev build; defaults to the compose
+ports 127.0.0.1:8080 and 127.0.0.1:8180, editable in the same page). The chat
+panel probes the local address and offers a **Connect** button in its banner
+when a VegaDuta core answers — one click switches the environment to `local`
+and signs in there. Local is the one environment that may point at loopback,
+because it is your own install, explicitly selected; there are no silent
+localhost defaults.
 
 Self-hosted installs need the public Keycloak client `agentic-ai-ide` in the
 `agentic-ai` realm with the device grant enabled. Being a public client it has

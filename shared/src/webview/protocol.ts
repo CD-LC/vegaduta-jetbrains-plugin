@@ -9,7 +9,10 @@
 // side panel is itself a trusted extension page, so there the "host" half
 // lives in the same page (loopback transport) and fetches directly.
 
+import type { LocalServerInfo } from "../api/localPlatform";
 import type { AgentSummary, WorkflowRun, WorkflowSummary } from "../api/types";
+
+export type { LocalServerInfo } from "../api/localPlatform";
 
 /** Which host this is. "eclipse" added 2026-09-18 - the Eclipse host had been
  * reporting "jetbrains", the nearest member, because the union lacked it. */
@@ -192,8 +195,19 @@ export type HostToWebview =
        * only knows the OS preference (JCEF, SWT). VS Code needs none - its
        * body class already says. Absent = follow the OS. */
       theme?: "dark" | "light";
+      /** A VegaDuta server the host found running on this machine (the
+       * localPlatform probe), or null. Absent on hosts that do not probe;
+       * the webview then simply never offers "Connect". */
+      localServer?: LocalServerInfo | null;
     }
   | { type: "auth.changed"; auth: AuthState }
+  | {
+      /** A locally running VegaDuta server appeared or disappeared after
+       * init (a settings change or a later probe). Updates init.localServer
+       * without a full re-init, which would restart the webview engine host. */
+      type: "local.changed";
+      localServer: LocalServerInfo | null;
+    }
   | ({ type: "runtime.status" } & RuntimeStatus)
   | {
       /** Host asks the chat app to open its on-device model panel (e.g. a
@@ -278,6 +292,14 @@ export type HostToWebview =
 export type WebviewToHost =
   | { type: "ready" }
   | { type: "auth.signIn" }
+  | {
+      /** The person clicked Connect for the locally running server the host
+       * reported (init.localServer / local.changed): switch the environment
+       * to the local install, then sign in there (or offer the API-key path
+       * when its Keycloak did not answer). Only sent when a local server was
+       * reported, so a host that pre-dates this message never receives it. */
+      type: "auth.connectLocal";
+    }
   | { type: "auth.signOut" }
   | { type: "chat.send"; reqId: string; agentId: string; message: string; sessionId?: string | null }
   | { type: "chat.abort"; reqId: string }

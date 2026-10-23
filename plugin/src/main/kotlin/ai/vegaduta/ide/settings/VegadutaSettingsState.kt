@@ -3,11 +3,12 @@
 // exists for self-hosted installs and is entered explicitly by the user.
 // Mirrors ENVIRONMENTS in clients/shared/src/api/types.ts.
 //
-// The one address here that MAY be a loopback URL is the local inference
-// server: that is the user's own process on their own machine, not a
-// browser-facing platform URL or a token issuer, so RULE 0 does not cover it
-// (clients/shared/src/edge/ollamaEngine.ts documents the same exception).
-// It still has no default - blank means local inference is off.
+// Two addresses here MAY be loopback URLs, both the user's own machine rather
+// than a cloud endpoint: the local inference server (Ollama / LM Studio /
+// llama.cpp, clients/shared/src/edge/ollamaEngine.ts documents the carve-out)
+// and the "local" environment - a VegaDuta install the user runs themselves
+// (compose lite or a dev build), explicitly selected, never defaulted.
+// The local inference server still has no default: blank means it is off.
 
 package ai.vegaduta.ide.settings
 
@@ -26,6 +27,12 @@ class VegadutaSettingsState : PersistentStateComponent<VegadutaSettingsState.Sta
         var environment: String = ENV_PRODUCTION
         var customApiBase: String = ""
         var customAuthBase: String = ""
+        // The "local" environment - a VegaDuta install on this machine.
+        // Blank = the compose defaults (core :8080, Keycloak :8180); a
+        // non-default install types its own. Explicitly opted into by picking
+        // "local" in the environment combo or the panel's Connect button.
+        var localApiBase: String = ""
+        var localAuthBase: String = ""
         // Local inference (the user's own OpenAI-compatible server: Ollama,
         // LM Studio, llama.cpp). Blank base URL = the whole local path is off,
         // which is the default: nothing is probed until the user types a URL.
@@ -86,6 +93,18 @@ class VegadutaSettingsState : PersistentStateComponent<VegadutaSettingsState.Sta
         get() = state.customAuthBase
         set(value) {
             state.customAuthBase = value
+        }
+
+    var localApiBase: String
+        get() = state.localApiBase
+        set(value) {
+            state.localApiBase = value
+        }
+
+    var localAuthBase: String
+        get() = state.localAuthBase
+        set(value) {
+            state.localAuthBase = value
         }
 
     var localServerBaseUrl: String
@@ -197,14 +216,24 @@ class VegadutaSettingsState : PersistentStateComponent<VegadutaSettingsState.Sta
     fun localCompletionsActive(): Boolean =
         state.localCompletionsEnabled && localServerBaseUrlOrNull() != null
 
+    /** The local install's api base, or the compose default when unset. */
+    fun localApiBaseOrDefault(): String =
+        state.localApiBase.trim().trimEnd('/').ifBlank { LOCAL_API_DEFAULT }
+
+    /** Its Keycloak, same defaulting. */
+    fun localAuthBaseOrDefault(): String =
+        state.localAuthBase.trim().trimEnd('/').ifBlank { LOCAL_AUTH_DEFAULT }
+
     fun apiBase(): String = when (state.environment) {
         ENV_PRODUCTION -> "https://api.vegaduta.ai"
+        ENV_LOCAL -> localApiBaseOrDefault()
         ENV_CUSTOM -> state.customApiBase.trim().ifBlank { "https://api.vegaduta.xyz" }
         else -> "https://api.vegaduta.xyz"
     }
 
     fun authBase(): String = when (state.environment) {
         ENV_PRODUCTION -> "https://auth.vegaduta.ai"
+        ENV_LOCAL -> localAuthBaseOrDefault()
         ENV_CUSTOM -> state.customAuthBase.trim().ifBlank { "https://auth.vegaduta.xyz" }
         else -> "https://auth.vegaduta.xyz"
     }
@@ -213,6 +242,13 @@ class VegadutaSettingsState : PersistentStateComponent<VegadutaSettingsState.Sta
         const val ENV_STAGING = "staging"
         const val ENV_PRODUCTION = "production"
         const val ENV_CUSTOM = "custom"
+        const val ENV_LOCAL = "local"
+
+        /** deploy/compose defaults (CORE_HOST_PORT / KEYCLOAK_HOST_PORT on
+         * BIND_ADDR 127.0.0.1) - the one pair of loopback URLs this plugin
+         * may hold, because they name the user's own install. */
+        const val LOCAL_API_DEFAULT = "http://127.0.0.1:8080"
+        const val LOCAL_AUTH_DEFAULT = "http://127.0.0.1:8180"
 
         /** vegaduta.agent.maxSteps' declared minimum/maximum in
          * clients/vscode/package.json. */

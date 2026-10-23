@@ -38,6 +38,7 @@ package ai.vegaduta.ide.toolwindow
 import ai.vegaduta.ide.api.AgentSummary
 import ai.vegaduta.ide.api.ApiClient
 import ai.vegaduta.ide.api.ApiException
+import ai.vegaduta.ide.api.LocalPlatformProbe
 import ai.vegaduta.ide.api.WireJson
 import ai.vegaduta.ide.api.WorkflowRun
 import ai.vegaduta.ide.api.WorkflowSummary
@@ -71,6 +72,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.jcef.JBCefBrowser
@@ -213,6 +215,7 @@ class JcefBridge(private val project: Project) : Disposable, ChatSurface {
             // window) - see deliverInitThenPending().
             "ready" -> sendInit()
             "auth.signIn" -> service<DeviceFlowLoginService>().signIn(project)
+            "auth.connectLocal" -> connectLocal()
             "auth.signOut" -> service<TokenStore>().signOut() // listener posts auth.changed
             "chat.send" -> handleChatSend(msg)
             "chat.abort" -> msg.str("reqId")?.let { activeChats[it]?.set(true) }
@@ -463,6 +466,21 @@ class JcefBridge(private val project: Project) : Disposable, ChatSurface {
                 put("auth", authJson())
                 put("agents", WireJson.encodeToJsonElement(ListSerializer(AgentSummary.serializer()), agents))
                 put("workflows", WireJson.encodeToJsonElement(ListSerializer(WorkflowSummary.serializer()), workflows))
+                // A VegaDuta install answering on this machine (compose lite
+                // or a dev build) earns the banner's "Connect" button. Probed
+                // host-side because loopback refuses fast when nothing runs,
+                // and because the page's own fetch would not reach it in a
+                // way every JCEF version reports the same.
+                LocalPlatformProbe.probe(
+                    VegadutaSettingsState.getInstance().localApiBaseOrDefault(),
+                    VegadutaSettingsState.getInstance().localAuthBaseOrDefault(),
+                )?.let { local ->
+                    putJsonObject("localServer") {
+                        put("apiBase", local.apiBase)
+                        put("authBase", local.authBase)
+                        put("authMode", local.authMode?.name?.lowercase())
+                    }
+                }
                 // True once a local inference server URL is set - typed by
                 // the user, filled in by Detect local server, or written by
                 // the bundled runtime when it starts (BundledRuntimeService;
@@ -572,6 +590,88 @@ class JcefBridge(private val project: Project) : Disposable, ChatSurface {
             put("signedIn", tokens.isSignedIn() || tokens.apiKey() != null)
             tokens.usernameOrNull()?.let { put("username", it) }
             tokens.authMode()?.let { put("mode", it) }
+        }
+    }
+
+    /** auth.connectLocal: the panel's Connect button - point the environment
+     * at the VegaDuta install this machine is running and sign in there.
+     * The probe re-runs because init's result can be minutes old; a server
+     * that went away since gets a plain answer. A Keycloak that did not
+     * answer means the device flow cannot start, so the API-key path is
+     * offered instead - same rule as the shared probe's contract. */
+    private fun connectLocal() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val settings = VegadutaSettingsState.getInstance()
+            val found = LocalPlatformProbe.probe(
+                settings.localApiBaseOrDefault(),
+                settings.localAuthBaseOrDefault(),
+            )
+            ApplicationManager.getApplication().invokeLater {
+                if (disposed.get() || project.isDisposed) return@invokeLater
+                if (found == null) {
+                    Messages.showInfoMessage(
+                        "Nothing answered at ${settings.localApiBaseOrDefault()} - " +
+                            "the local server may have stopped.",
+                        "VegaDuta",
+                    )
+                    return@invokeLater
+                }
+                settings.localApiBase = found.apiBase
+                found.authBase?.let { settings.localAuthBase = it }
+                settings.environment = VegadutaSettingsState.ENV_LOCAL
+                when (found.authMode) {
+                    // A personal install: accounts live in core, no Keycloak
+                    // exists - identifier + password, the same login its own
+                    // console posts to /api/auth/local/login.
+                    LocalPlatformProbe.AuthMode.LOCAL -> connectLocalAccount(found.apiBase)
+                    LocalPlatformProbe.AuthMode.KEYCLOAK -> service<DeviceFlowLoginService>().signIn(project)
+                    null -> {
+                        val key = Messages.showPasswordDialog(
+                            "VegaDuta found on this machine, but no sign-in answered - " +
+                                "its Keycloak may still be booting. " +
+                                "A scoped vmcp_ API key works without it. Paste one here, or Cancel to try later.",
+                            "VegaDuta API Key",
+                        )
+                        if (!key.isNullOrBlank()) service<TokenStore>().setApiKey(key)
+                    }
+                }
+                // Re-send init so the page's apiBase and localServer follow
+                // the switch; a successful sign-in then posts auth.changed.
+                sendInit()
+            }
+        }
+    }
+
+    /** Personal-install sign-in: identifier + password off the pooled thread
+     * (the probe's own POST), dialogs on the EDT. */
+    private fun connectLocalAccount(apiBase: String) {
+        val identifier = Messages.showInputDialog(
+            "Email for your account on $apiBase:",
+            "VegaDuta on This Machine",
+            null,
+        ) ?: return
+        val password = Messages.showPasswordDialog(
+            "Password for $identifier:",
+            "VegaDuta on This Machine",
+        ) ?: return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            when (val result = LocalPlatformProbe.login(apiBase, identifier.trim(), password)) {
+                is LocalPlatformProbe.AuthResult.Ok -> {
+                    service<TokenStore>().storeLocalSession(result.session, apiBase)
+                    if (result.session.passwordChangeRequired) {
+                        ApplicationManager.getApplication().invokeLater {
+                            Messages.showWarningDialog(
+                                "This account still uses its setup password - " +
+                                    "change it in the console's settings.",
+                                "VegaDuta",
+                            )
+                        }
+                    }
+                }
+                is LocalPlatformProbe.AuthResult.Failed -> ApplicationManager.getApplication().invokeLater {
+                    Messages.showErrorDialog(result.message, "VegaDuta Sign-In Failed")
+                }
+            }
         }
     }
 

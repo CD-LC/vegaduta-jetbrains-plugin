@@ -38,6 +38,7 @@ import type {
   EngineStatus,
   HostCapabilities,
   HostToWebview,
+  LocalServerInfo,
   RuntimeStatus,
   WebviewTransport,
 } from "../protocol";
@@ -178,6 +179,10 @@ interface ChatAppState {
   toolsQuery: string;
   /** The person is typing right now (drives the header's live indicator). */
   typing: boolean;
+  /** A VegaDuta server the host found running on this machine
+   * (init.localServer / local.changed); null = nothing detected or the host
+   * does not probe. Drives the "Connect" affordance next to sign-in. */
+  localServer: LocalServerInfo | null;
 }
 
 const state: ChatAppState = {
@@ -217,6 +222,7 @@ const state: ChatAppState = {
   toolId: null,
   toolsQuery: "",
   typing: false,
+  localServer: null,
 };
 
 let transport: WebviewTransport;
@@ -681,26 +687,54 @@ function renderAuth(): void {
     out.addEventListener("click", () => transport.post({ type: "auth.signOut" }));
     bar.append(avatar, text, out);
   } else {
+    // Signed out is a fully working state, not a blocker: the panel's tools
+    // and (when offered) the on-device engine need no account. The banner's
+    // job is to say that first and offer connection as an upgrade - not to
+    // read like a required step, which is why the lone button is a ghost,
+    // not a primary. A detected local server earns the primary slot instead:
+    // it is a concrete thing on this machine, not an account to create.
     const badge = el("span", "auth-avatar auth-avatar-spark");
     badge.append(icon("spark"));
     const text = el("span", "auth-text");
     text.append(
-      el("span", "auth-user", "Ready - no account needed"),
+      el("span", "auth-user", "Ready - no sign-in needed"),
       el(
         "span",
         "auth-sub",
-        engineReady()
-          ? "Chatting on this device. Sign in for team agents."
-          : onDeviceOffered()
-            ? "Free on-device AI and tools. Sign in for team agents."
-            : "Tools work now. Sign in to chat with your agents."
+        state.localServer
+          ? `VegaDūta found on this machine (${state.localServer.apiBase}) - connect for its agents, or keep everything on-device.`
+          : engineReady()
+            ? "Chatting on this device already. Sign-in is optional - it adds hosted team agents."
+            : onDeviceOffered()
+              ? "Free on-device AI and tools, no account needed. Sign-in only adds hosted team agents."
+              : "Instant tools work now, no account needed. Sign-in only adds hosted agents."
       )
     );
-    const signIn = el("button", "btn-primary auth-btn");
-    signIn.type = "button";
-    signIn.append(icon("key"), el("span", "auth-btn-label", "Sign in"));
-    signIn.addEventListener("click", () => transport.post({ type: "auth.signIn" }));
-    bar.append(badge, text, signIn);
+    bar.append(badge, text);
+    if (state.localServer) {
+      // auth-bar is a 3-column grid (badge | text | buttons): the two buttons
+      // must share one cell or the second lands alone on an implicit row.
+      const btns = el("span", "auth-btns");
+      const connect = el("button", "btn-primary auth-btn");
+      connect.type = "button";
+      connect.title = "Sign in to the VegaDūta server running on this machine - adds its agents";
+      connect.append(icon("key"), el("span", "auth-btn-label", "Connect"));
+      connect.addEventListener("click", () => transport.post({ type: "auth.connectLocal" }));
+      const cloud = el("button", "btn-ghost auth-btn");
+      cloud.type = "button";
+      cloud.title = "Optional - sign in to a hosted VegaDūta workspace instead";
+      cloud.append(el("span", "auth-btn-label", "Cloud"));
+      cloud.addEventListener("click", () => transport.post({ type: "auth.signIn" }));
+      btns.append(connect, cloud);
+      bar.append(btns);
+    } else {
+      const signIn = el("button", "btn-ghost auth-btn");
+      signIn.type = "button";
+      signIn.title = "Optional - adds your team's hosted agents, knowledge and workflows";
+      signIn.append(icon("key"), el("span", "auth-btn-label", "Sign in"));
+      signIn.addEventListener("click", () => transport.post({ type: "auth.signIn" }));
+      bar.append(signIn);
+    }
   }
   renderComposer();
   renderWelcome();
@@ -721,7 +755,7 @@ function renderComposer(): void {
   } else if (!enabled) {
     input.placeholder = onDeviceOffered()
       ? "Ask anything - explain, test, review, refactor… (/ for commands)"
-      : "Ask anything - sign in and I'll answer (/ for commands)";
+      : "Ask anything - no sign-in needed (/ for commands)";
   } else if (state.armedRecipe) {
     input.placeholder = recipeTakesInput(state.armedRecipe)
       ? `${state.armedRecipe.name}: add details, then Enter`
@@ -834,8 +868,15 @@ function renderParked(): void {
     );
   }
   if (!state.privateMode) {
+    if (state.localServer) {
+      options.append(
+        optionTile("key", "Connect to the VegaDūta on this machine", `${state.localServer.apiBase} - its agents answer here`, () =>
+          transport.post({ type: "auth.connectLocal" })
+        )
+      );
+    }
     options.append(
-      optionTile("key", "Sign in to VegaDūta", "Your team's agents, knowledge and workflows", () =>
+      optionTile("key", state.localServer ? "Sign in to a hosted workspace" : "Sign in to VegaDūta", "Your team's agents, knowledge and workflows", () =>
         transport.post({ type: "auth.signIn" })
       )
     );
@@ -934,7 +975,7 @@ function renderAgents(): void {
     select.append(option);
   }
   if (state.agents.length === 0) {
-    const option = el("option", undefined, state.auth.signedIn ? "No agents yet" : "Sign in for agents");
+    const option = el("option", undefined, state.auth.signedIn ? "No agents yet" : "Connect for agents");
     option.value = "";
     select.append(option);
   }
@@ -1915,9 +1956,16 @@ function quickStarts(): QuickStart[] {
     });
   }
   if (!state.auth.signedIn) {
+    if (state.localServer) {
+      cards.push({
+        title: "Connect to the VegaDūta on this machine", icon: "key",
+        detail: `${state.localServer.apiBase} - its agents and workflows`,
+        run: () => transport.post({ type: "auth.connectLocal" }),
+      });
+    }
     cards.push({
       title: "Sign in for your team's agents", icon: "key",
-      detail: "Chat with your agents and run workflows",
+      detail: "Optional - hosted agents, knowledge and workflows",
       run: () => transport.post({ type: "auth.signIn" }),
     });
   } else if (state.workflows.length > 0 && !state.privateMode) {
@@ -2102,6 +2150,10 @@ function renderWelcome(): void {
   tools.append(tgrid);
   welcome.append(tools);
 
+  // Self-host promo: the local platform story - an ad slot whose content
+  // changes when a running install is actually detected.
+  welcome.append(renderSelfHost());
+
   // Recipe spotlight for the role.
   const spotlight = allRecipes()
     .filter((r) => r.roles[0] === role && recipeAvailable(r, state.capabilities))
@@ -2123,6 +2175,54 @@ function renderWelcome(): void {
   const tip = el("p", "vd-tip");
   tip.append(el("strong", undefined, "Tip  "), el("span", undefined, TIPS[new Date().getDate() % TIPS.length]));
   welcome.append(tip);
+}
+
+/** The self-host slot on the welcome screen - the ad for the open-source
+ * platform. Two states: nothing found -> "run the whole framework on your
+ * machine" with a Get-it CTA (the public repo, install script and docs); the
+ * host's probe found one -> "your install is running, connect it". It reuses
+ * the .vd-start-here shell verbatim so it cannot drift out of alignment -
+ * the only new styling is the icon disc and the gold tint that marks it as
+ * "yours", not another quick-start card. */
+function renderSelfHost(): HTMLElement {
+  const box = section("Your own server");
+  const card = el("div", "vd-start-here vd-promo");
+  const disc = el("span", "vd-promo-disc");
+  disc.setAttribute("aria-hidden", "true");
+  disc.append(icon("rocket"));
+  const text = el("span", "vd-start-here-text");
+  const found = state.localServer;
+  if (found) {
+    text.append(
+      el("strong", "vd-promo-title", "VegaDūta is running on this machine"),
+      el("span", undefined, `${found.apiBase} - connect to use its agents and workflows here.`)
+    );
+    const connect = el("button", "btn-primary");
+    connect.type = "button";
+    connect.title = "Sign in to the VegaDūta server running on this machine";
+    connect.append(icon("key"), el("span", "auth-btn-label", "Connect"));
+    connect.addEventListener("click", () => transport.post({ type: "auth.connectLocal" }));
+    card.append(disc, text, connect);
+  } else {
+    text.append(
+      el("strong", "vd-promo-title", "Run the whole platform on this machine"),
+      el(
+        "span",
+        undefined,
+        "Free and open source - your own agents, workflows and knowledge on your own hardware. One command to install; this panel finds it and connects for you."
+      )
+    );
+    const get = el("button", "btn-primary");
+    get.type = "button";
+    get.title = "The open-source project: source, install script and docs";
+    get.append(icon("rocket"), el("span", "auth-btn-label", "Get it"));
+    get.addEventListener("click", () =>
+      transport.post({ type: "ui.openExternal", url: "https://github.com/CD-LC/vegaduta" })
+    );
+    card.append(disc, text, get);
+  }
+  box.append(card);
+  return box;
 }
 
 /** On-device AI status as a card: download (one click), loading, or ready. */
@@ -3733,6 +3833,9 @@ function composeBlockedText(): string {
       ? "Private Mode is on and no on-device model is ready, so nothing can answer. Open the on-device models to download one - nothing is sent to a hosted agent instead."
       : "Private Mode is on and this host has no on-device engine, so nothing can answer. Nothing is sent to a hosted agent instead.";
   }
+  if (state.localServer) {
+    return "Connect to the VegaDūta on this machine, or download an on-device model, to start chatting.";
+  }
   return onDeviceOffered() ? "Sign in, or download a free on-device model, to start chatting." : "Sign in to start chatting.";
 }
 
@@ -4312,6 +4415,7 @@ function onHostMessage(message: HostToWebview): void {
       state.workflows = message.workflows;
       state.hostLocalEngine = message.hostLocalEngine;
       state.apiBase = message.apiBase;
+      state.localServer = message.localServer ?? null;
       state.platform = message.platform;
       state.capabilities = normalizeCapabilities(message.capabilities);
       if (!state.localModeChosen) state.localMode = !message.auth.signedIn;
@@ -4362,6 +4466,11 @@ function onHostMessage(message: HostToWebview): void {
       if (state.toolkitOpen) renderToolkit();
       break;
     }
+    case "local.changed":
+      state.localServer = message.localServer;
+      renderAuth();
+      renderWelcome();
+      break;
     case "agents.changed":
       state.agents = message.agents;
       state.workflows = message.workflows;

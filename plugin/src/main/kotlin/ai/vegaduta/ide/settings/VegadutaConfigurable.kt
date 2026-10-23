@@ -45,12 +45,22 @@ class VegadutaConfigurable : Configurable {
         VegadutaSettingsState.ENV_STAGING,
         VegadutaSettingsState.ENV_PRODUCTION,
         VegadutaSettingsState.ENV_CUSTOM,
+        VegadutaSettingsState.ENV_LOCAL,
     )
 
     private var panel: JPanel? = null
     private val envCombo = ComboBox(environments)
     private val customApiField = JBTextField()
     private val customAuthField = JBTextField()
+    // The "local" environment - a VegaDuta install on this machine. Blank
+    // fields mean the compose defaults; the combo's Connect button in the
+    // chat panel fills these in from its own probe.
+    private val localApiField = JBTextField().apply {
+        emptyText.text = "blank = ${VegadutaSettingsState.LOCAL_API_DEFAULT} (compose default)"
+    }
+    private val localAuthField = JBTextField().apply {
+        emptyText.text = "blank = ${VegadutaSettingsState.LOCAL_AUTH_DEFAULT}"
+    }
     private val statusLabel = JBLabel()
 
     // Local inference: the user's own OpenAI-compatible server. Blank URL =
@@ -208,6 +218,8 @@ class VegadutaConfigurable : Configurable {
             .addLabeledComponent("Environment:", envCombo)
             .addLabeledComponent("Custom API base:", customApiField)
             .addLabeledComponent("Custom auth base:", customAuthField)
+            .addLabeledComponent("Local API base:", localApiField)
+            .addLabeledComponent("Local auth base:", localAuthField)
             .addComponent(buttons)
             .addComponent(statusLabel)
             .addSeparator()
@@ -281,6 +293,8 @@ class VegadutaConfigurable : Configurable {
         return envCombo.selectedItem != settings.environment ||
             customApiField.text.trim() != settings.customApiBase ||
             customAuthField.text.trim() != settings.customAuthBase ||
+            localApiField.text.trim() != settings.localApiBase ||
+            localAuthField.text.trim() != settings.localAuthBase ||
             localBaseField.text.trim() != settings.localServerBaseUrl ||
             localModelField.text.trim() != settings.localServerModel ||
             localCompletionsCheck.isSelected != settings.localCompletionsEnabled ||
@@ -297,6 +311,8 @@ class VegadutaConfigurable : Configurable {
         settings.environment = envCombo.selectedItem as? String ?: VegadutaSettingsState.ENV_PRODUCTION
         settings.customApiBase = customApiField.text.trim()
         settings.customAuthBase = customAuthField.text.trim()
+        settings.localApiBase = localApiField.text.trim()
+        settings.localAuthBase = localAuthField.text.trim()
         settings.localServerBaseUrl = localBaseField.text.trim()
         settings.localServerModel = localModelField.text.trim()
         settings.localCompletionsEnabled = localCompletionsCheck.isSelected
@@ -318,6 +334,8 @@ class VegadutaConfigurable : Configurable {
         envCombo.selectedItem = settings.environment
         customApiField.text = settings.customApiBase
         customAuthField.text = settings.customAuthBase
+        localApiField.text = settings.localApiBase
+        localAuthField.text = settings.localAuthBase
         localBaseField.text = settings.localServerBaseUrl
         localModelField.text = settings.localServerModel
         localCompletionsCheck.isSelected = settings.localCompletionsEnabled
@@ -374,6 +392,9 @@ class VegadutaConfigurable : Configurable {
         val custom = envCombo.selectedItem == VegadutaSettingsState.ENV_CUSTOM
         customApiField.isEnabled = custom
         customAuthField.isEnabled = custom
+        val local = envCombo.selectedItem == VegadutaSettingsState.ENV_LOCAL
+        localApiField.isEnabled = local
+        localAuthField.isEnabled = local
     }
 
     private fun refreshStatus() {

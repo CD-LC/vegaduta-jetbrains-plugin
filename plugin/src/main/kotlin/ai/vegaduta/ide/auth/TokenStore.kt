@@ -9,6 +9,7 @@ package ai.vegaduta.ide.auth
 
 import ai.vegaduta.ide.api.IDE_CLIENT_ID
 import ai.vegaduta.ide.api.KEYCLOAK_REALM
+import ai.vegaduta.ide.api.LocalPlatformProbe
 import ai.vegaduta.ide.api.WireJson
 import ai.vegaduta.ide.settings.VegadutaSettingsState
 import com.intellij.credentialStore.CredentialAttributes
@@ -32,6 +33,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 private const val SERVICE_NAME = "VegaDuta IDE"
 private const val KEY_REFRESH_TOKEN = "refresh-token"
+/** Set only when the stored refresh token is a personal install's
+ * /api/auth/local session: its value is the install's apiBase, which is also
+ * where refresh posts. Absent = the token is a Keycloak refresh token. */
+private const val KEY_LOCAL_SESSION_BASE = "local-session-base"
 private const val KEY_API_KEY = "api-key"
 
 /** The coding agent's BYOK key for a third-party OpenAI-compatible provider.
@@ -92,6 +97,19 @@ class TokenStore {
         // Another thread may have refreshed while we waited on the lock.
         accessToken?.let { if (System.currentTimeMillis() < expiresAtMs) return it }
         val refresh = refreshToken() ?: return null
+        localSessionBase()?.let { base ->
+            // A personal install's session: refresh on core, not a Keycloak.
+            return when (val result = LocalPlatformProbe.refresh(base, refresh)) {
+                is LocalPlatformProbe.AuthResult.Ok -> storeLocalSession(result.session, base)
+                is LocalPlatformProbe.AuthResult.Failed -> {
+                    // An answered refusal = the session is gone; unreachable
+                    // (null status) = transient, keep the refresh token.
+                    if (result.status != null) signOut()
+                    log.info("Local session refresh rejected: ${result.message}")
+                    null
+                }
+            }
+        }
         val response = try {
             http.send(
                 HttpRequest.newBuilder(URI.create(tokenEndpoint()))
@@ -143,10 +161,34 @@ class TokenStore {
         obj["refresh_token"]?.jsonPrimitive?.contentOrNull?.let { refresh ->
             PasswordSafe.instance.set(attributes(KEY_REFRESH_TOKEN), Credentials(KEY_REFRESH_TOKEN, refresh))
         }
+        // A Keycloak response replaces any local-accounts session marker, so
+        // refresh goes back to the token endpoint, not the local install.
+        PasswordSafe.instance.set(attributes(KEY_LOCAL_SESSION_BASE), null)
         if (!wasSignedIn) {
             fireAuthChanged()
         }
         return access
+    }
+
+    /** Stores a personal install's /api/auth/local session (its camelCase
+     * fields, not a Keycloak response's snake_case). Marks the refresh token
+     * as local so refreshBlocking() posts to core, not a token endpoint. */
+    fun storeLocalSession(session: LocalPlatformProbe.Session, apiBase: String): String {
+        val wasSignedIn = isSignedIn()
+        accessToken = session.accessToken
+        expiresAtMs = System.currentTimeMillis() + (session.expiresIn - 30).coerceAtLeast(0) * 1000
+        username = session.username
+        session.refreshToken?.let {
+            PasswordSafe.instance.set(attributes(KEY_REFRESH_TOKEN), Credentials(KEY_REFRESH_TOKEN, it))
+        }
+        PasswordSafe.instance.set(
+            attributes(KEY_LOCAL_SESSION_BASE),
+            Credentials(KEY_LOCAL_SESSION_BASE, apiBase),
+        )
+        if (!wasSignedIn) {
+            fireAuthChanged()
+        }
+        return session.accessToken
     }
 
     fun signOut() {
@@ -155,6 +197,7 @@ class TokenStore {
         expiresAtMs = 0
         username = null
         PasswordSafe.instance.set(attributes(KEY_REFRESH_TOKEN), null)
+        PasswordSafe.instance.set(attributes(KEY_LOCAL_SESSION_BASE), null)
         if (wasSignedIn) {
             fireAuthChanged()
         }
@@ -190,6 +233,9 @@ class TokenStore {
 
     private fun refreshToken(): String? =
         PasswordSafe.instance.getPassword(attributes(KEY_REFRESH_TOKEN))?.takeIf { it.isNotBlank() }
+
+    private fun localSessionBase(): String? =
+        PasswordSafe.instance.getPassword(attributes(KEY_LOCAL_SESSION_BASE))?.takeIf { it.isNotBlank() }
 
     private fun tokenEndpoint(): String =
         VegadutaSettingsState.getInstance().authBase().trimEnd('/') +
